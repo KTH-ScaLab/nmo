@@ -1,0 +1,35 @@
+stats "gauge_1-1_p100.dat" u 2 name "h2p" nooutput
+stats "gauge_1-1_cc.dat" u 2 name "cc" nooutput
+
+set title ARG2
+
+set logscale x 2
+set style data lp
+#set yrange [0:*]
+
+set xlabel "Workload intensity (flops/element)"
+set ylabel "Interference coefficient"
+set y2label "UPI traffic (GB/s)" offset -1,0
+
+set y2range [0:120]
+set ytics nomirror
+
+set grid
+
+set key above
+
+$pcm << EOD
+# threads=12
+1 88831.2
+2 87215.2
+4 86411.4
+8 83153.7
+16 55735.6
+32 19906
+64 6472.96
+EOD
+
+set y2tics
+
+plot "gauge_1-1_p100.dat" u 1:($2/h2p_min) t "LBench (left axis)", $pcm u 1:($2/1000) t "PCM (right axis)" dt 2 axes x1y2
+#plot "gauge_1-1_p100.dat" u 1:($2/h2p_min) t "Ext. iBench, core (left axis)", "gauge_1-1_cc.dat" u 1:($2/cc_min) t "Ext. iBench, HT (left axis)", $pcm u 1:($2/1000) t "PCM (right axis)" dt 2 axes x1y2

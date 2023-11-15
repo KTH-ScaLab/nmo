@@ -1,0 +1,14 @@
+set grid
+set yrange [0:*]
+set style data lp
+set logscale x 2
+
+set ylabel "Bandwidth (MB/s)"
+set xlabel "flops/element"
+
+set title "UPI traffic injection"
+
+threads(n) = word("1 2 4 8 12 16 20 24", n+1)
+
+plot for [n=0:7] "upi.dat" index n t threads(n)." threads",\
+     for [n=0:7] "bw_r.dat" index n t "" ls n+1 dt 3 w l

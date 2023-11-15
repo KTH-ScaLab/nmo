@@ -1,0 +1,14 @@
+set datafile separator ","
+set yrange [0:*]
+
+set key autotitle columnheader noenhanced
+set style data histogram
+set style fill solid border -1
+#set style data linespoints
+
+set xlabel "Kernel invocation"
+#set ylabel "GFLOP/s or GB/s"
+
+set grid y
+
+plot ARG1 u 1 t "Runtime (s)", "" u (($2+$3)/10) t "Bandwidth (10 GB/s)", "" u 4 t "GFLOP/s", "" u ($3/($2+$3)) t "Remote memory access (%)" with lp, "" u 7 t "Cycles stalled waiting on DRAM (%)" with lp

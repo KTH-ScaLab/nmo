@@ -1,0 +1,15 @@
+set grid
+set style data lp
+
+set ylabel "MC traffic (% of peak)"
+set xlabel "Benchmark intensity (%)"
+
+#set key off
+set key left width 1 height 1
+
+stats "bw_int.dat" u 2 name "bw_all" nooutput
+
+set yrange [0:110]
+set xrange [0:110]
+
+plot "bw_int.dat" u 3:(100*$2/bw_all_max) t "16 threads"

@@ -1,0 +1,16 @@
+set grid
+set style data lp
+
+set ylabel "Measured LoI (% of peak)"
+set xlabel "Configured LBench intensity (%)"
+
+#set key left width 1 height 1
+#set key left width -2 height 1 reverse
+set key above
+
+stats "upi.dat" u 2 name "upi_all" nooutput
+
+set yrange [5:55]
+set xrange [5:55]
+
+plot "upi_int.dat" u 3:(100*$2/upi_all_max) index 0 t "1 thread", "" u 3:(100*$2/upi_all_max) index 1 t "2 threads"
