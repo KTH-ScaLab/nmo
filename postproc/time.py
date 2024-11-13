@@ -4,7 +4,7 @@ import sys
 import prof_reader
 
 base = sys.argv[1]
-prof = prof_reader.read(base)
+prof = prof_reader.read(base, 0)
 
 labels = [tag for tag, _, _ in prof.addr_tags] + ["other"]
 times = [[] for i in range(len(prof.addr_tags) + 1)]

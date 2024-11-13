@@ -2,11 +2,23 @@
 #include <stdio.h>
 #include <string.h>
 #include <perfmon/pfmlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 
 void errx(int x, const char *s)
 {
    fprintf(stderr, "%s\n", s);
    exit(1);
+}
+
+//"Pseudo-names" for ARM SPE events
+void write_spe_events()
+{
+   printf("nmo::ARM_SPE [Virtual address sampling with ARM statistical profiling extension]\n");
+   printf("\tLOAD (umask) [load instructions]\n");
+   printf("\tSTORE (umask) [store instructions]\n");
+   printf("\tLOADSTORE (umask) [load and store instructions]\n");
 }
 
 void list_pmu_events(pfm_pmu_t pmu)
@@ -50,4 +62,8 @@ int main()
     pfm_for_all_pmus(p) {
        list_pmu_events(p);
     }
+
+    // Print SPE events if proper device is found
+    if (faccessat(AT_FDCWD, "/sys/bus/event_source/devices/arm_spe_0/format", R_OK, AT_EACCESS) == 0)
+        write_spe_events();
 }

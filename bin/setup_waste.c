@@ -45,8 +45,8 @@ int main(int argc, char **argv)
     }
 
     long long free;
-    if (numa_node_size(node, &free) < 0) {
-        fprintf(stderr, "error: numa_node_size\n");
+    if (numa_node_size64(node, &free) < 0) {
+        fprintf(stderr, "error: numa_node_size64\n");
         return 1;
     }
 
@@ -75,8 +75,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (numa_node_size(node, &free) < 0) {
-        fprintf(stderr, "error: numa_node_size\n");
+    if (numa_node_size64(node, &free) < 0) {
+        fprintf(stderr, "error: numa_node_size64\n");
         return 1;
     }
 

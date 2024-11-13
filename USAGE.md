@@ -128,8 +128,14 @@ All configuration options are provided using environment variables. The followin
 | `NMO_MODE`      | Profile collection mode   | none    |
 | `NMO_PERIOD`    | Sampling period           | 0       |
 | `NMO_TRACK_RSS` | Capture working set size  | off     |
+| `NMO_TARGET`    | Target process name       | off     |
+| `NMO_PIDNAME`   | Append `PID` to filenames | off     |
+| `NMO_BUFSIZE`   | Ring buffer size [MiB]    | 1       |
+| `NMO_AUXBUFSIZE`| Aux buffer size [MiB]     | 1       |
 
 Note that most profiling modes of NMO use the perf_event system in Linux. In some configurations, it is only available to the root user. The sysctl `kernel.perf_event_paranoid` can be used to control the access to perf_event for normal users. This value should be at most 1 to allow regular users to collect profiles using NMO.
+
+During sampling mode, `NMO_BUFSIZE` and `NMO_AUXBUFSIZE` regulates the size of those buffers, allocated on a per thread basis. As such, the total buffer size will scale with the amount of threads on the system. The number entered will be rounded down to nearest power of 2, and if parsing fails, will default to 1.
 
 ### Extended Roofline Profiling
 

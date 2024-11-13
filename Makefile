@@ -10,7 +10,7 @@ LIB_OBJECTS := $(patsubst %.cc,%.o,$(wildcard $(SRCDIR)/*.cc))
 DEPS = $(LIB_OBJECTS:%.o=%.d)
 
 CXX=g++
-CXXFLAGS= -fopenmp -fPIC -O2 -Wall -std=c++14 -g -I./include -MMD
+override CXXFLAGS+= -fopenmp -fPIC -O2 -Wall -std=c++14 -g -I./include -MMD
 CFLAGS = -O2 -Wall -g -MMD -I./include
 LDLIBS=-lpfm -lnuma -lcrypto
 

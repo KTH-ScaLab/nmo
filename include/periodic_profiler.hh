@@ -15,7 +15,8 @@ enum perp_mode {
 class PeriodicProfiler
 {
 public:
-    PeriodicProfiler(const char *profile_name, int sample_period, perp_mode mode);
+    PeriodicProfiler(const char *profile_name, int sample_period, perp_mode mode,
+        int ringbufsize, int auxbufsize);
     ~PeriodicProfiler();
     void kernel_start(const char *tag);
     void kernel_stop();

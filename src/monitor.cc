@@ -17,16 +17,59 @@
 #include "clock.hh"
 #include "nmo_exception.hh"
 
-#define RING_BUFFER_PAGES 128
-#define PAGE_SIZE 4096
+#define MB (1024*1024)
+#define PAGE_SIZE (sysconf(_SC_PAGESIZE))
 
 #define EVENTFD_INDEX (-1)
 #define SAMPLER_DRAIN 1
 #define SAMPLER_STOP 2
 
+// Fixes compatibility issue where old versions of
+// perfmon don't have this flag
+#ifndef PERF_AUX_FLAG_COLLISION
+#define PERF_AUX_FLAG_COLLISION 0x8
+#endif
+
+uint64_t parse_arm_spe_event(const char* event_name) {
+
+    //Return bit mask for attr.config
+
+    //ARM_SPE:LOAD - Virtual Address (VA) sampling of load instructions
+    if (!strncmp(event_name, "ARM_SPE:LOAD", 13)){
+        return 0x200000001;
+    }
+
+    //ARM_SPE:STORE - VA sampling of store instructions
+    if (!strncmp(event_name, "ARM_SPE:STORE", 14)){
+        return 0x400000001;
+    }
+
+    //ARM_SPE:LOADSTORE - Both Load/Store
+    if (!strncmp(event_name, "ARM_SPE:LOADSTORE",18)){
+        return 0x600000001;
+    }
+
+    //Other types of SPE events (or filters?)
+
+    //No match, return 0
+    return 0;
+}
+
+//Check if any event in SAMPLE_EVENTS is from ARM SPE
+int has_arm_spe_event(const char **event_names, const int _num_samplers) {
+
+    int val = 0;
+    for (int i = 0; i < _num_samplers; i++) {
+        val = parse_arm_spe_event(event_names[i]);
+        if (val != 0)
+            break;
+    }
+    return val;
+}
+
 perf_event_attr init_perf_attr(const char *event_name, bool per_thread, uint64_t sample_period)
 {
-    perf_event_attr attr;
+    perf_event_attr attr = {};
     memset(&attr, 0, sizeof(perf_event_attr));
     attr.size = sizeof(perf_event_attr);
     pfm_perf_encode_arg_t arg;
@@ -35,8 +78,10 @@ perf_event_attr init_perf_attr(const char *event_name, bool per_thread, uint64_t
     arg.attr = &attr;
     char *fstr;
     arg.fstr = &fstr;
+
     if (PFM_SUCCESS != pfm_get_os_event_encoding(event_name,
-            PFM_PLM0 | PFM_PLM3, PFM_OS_PERF_EVENT, &arg))
+            PFM_PLM0 | PFM_PLM3, PFM_OS_PERF_EVENT, &arg)
+            && !parse_arm_spe_event(event_name))
     {
         std::stringstream ss;
         ss << "pfm_get_os_event_encoding "<< event_name <<" fail";
@@ -64,6 +109,26 @@ perf_event_attr init_perf_attr(const char *event_name, bool per_thread, uint64_t
 
         // Prevent multiplexing. Maybe we will need it later, if we track more events.
         attr.pinned = 1;
+    }
+
+    //Check if event name belongs to ARM-SPE:
+    uint64_t spe_config = parse_arm_spe_event(event_name);
+    if (spe_config)
+    {
+        //read SPE PMU type
+        int SPE_event_type = 0;
+        // Open the file
+        std::ifstream file("/sys/bus/event_source/devices/arm_spe_0/type");
+        if (!file.is_open())
+            throw NmoException("Failed to open the file /sys/bus/event_source/devices/arm_spe_0/type");
+
+        file >> SPE_event_type;
+        file.close();
+
+        attr.type = SPE_event_type; //ARM SPE PMU code /sys/bus/event_source/devices/arm_spe_0/type
+        attr.sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_TIME | PERF_SAMPLE_CPU
+		| PERF_SAMPLE_DATA_SRC | PERF_SAMPLE_IDENTIFIER;
+        attr.config = spe_config; //checker returns the config
     }
 
     attr.disabled = 1;
@@ -98,7 +163,7 @@ void open_fds(int pid, bool per_thread, int cpu, const event_spec spec, uint64_t
         int fd = perf_event_open(&attr, pid, cpu, group_fd, 0);
         if (fd < 0) {
             std::stringstream ss;
-            ss << "perf_event_open failed [i="<< i << ", errno=" << strerror(errno) << "]";
+            ss << "perf_event_open failed [i="<< i << ", errno=" << strerror(errno) <<"]";
             throw NmoException(ss.str());
         }
         fds[i] = fd;
@@ -111,11 +176,14 @@ void open_fds(int pid, bool per_thread, int cpu, const event_spec spec, uint64_t
     }
 }
 
-Monitor::Monitor(const event_spec counter_spec, const event_spec sampler_spec, uint64_t sample_period, const char *name)
+Monitor::Monitor(const event_spec counter_spec, const event_spec sampler_spec, uint64_t sample_period,
+    int ringbufsize, int auxbufsize, const char *name)
     : _num_counters(counter_spec.n)
     , _num_samplers(sampler_spec.n)
     , _num_cpus(get_nprocs())
     , _sample_period(sample_period)
+    , _ringbufsize(ringbufsize)
+    , _auxbufsize(auxbufsize)
     , _counter_spec(counter_spec)
     , _sampler_spec(sampler_spec)
     , _nonstop_mode(false)
@@ -202,7 +270,25 @@ Monitor::Monitor(const event_spec counter_spec, const event_spec sampler_spec, u
 
 void Monitor::write_info(std::ofstream& info)
 {
+    int max_cmdline = 256;
+    std::ifstream clf("/proc/self/cmdline");
+    char cmdline[max_cmdline] = {};
+    clf.get(cmdline, max_cmdline);
+    clf.close();
+    for (int i = 0; i < max_cmdline-1; i++) {
+        if (!cmdline[i]) {
+            if (cmdline[i+1])
+                cmdline[i] = ' ';
+            else
+                break;
+        }
+    }
+    info << "cmdline=" << cmdline << std::endl;
+
     info << "sample_period=" << _sample_period << std::endl;
+
+    info << "bufsize_ring=" << _ringbufsize << std::endl;
+    info << "bufsize_aux=" << _auxbufsize << std::endl;
 
     if (_num_samplers) {
         info << "sample_md5=";
@@ -215,6 +301,8 @@ void Monitor::write_info(std::ofstream& info)
     }
 
     info << "clock_res=" << 1.0 / _clock_res << std::endl;
+
+    info << "l1_cache_line_size=" << sysconf(_SC_LEVEL1_DCACHE_LINESIZE) << std::endl;
 
     if (_kinfos.size()) {
         info << "tag=" << _kinfos[0].tag;
@@ -344,6 +432,16 @@ void Monitor::add_thread(int tid, int i, event_spec counter_spec, event_spec sam
     _counter_fds[i] = new int[_num_counters];
     open_fds(tid, false, -1, counter_spec, 0, _counter_fds[i]);
 
+    int ring_buffer_pages = (_ringbufsize*MB)/PAGE_SIZE;
+    int aux_buffer_pages  = (_auxbufsize*MB)/PAGE_SIZE;
+
+    // If ARM SPE - mmap anonymous page.
+    // The second perf_event_open for ARM SPE fails
+    // if this is not here
+    if (has_arm_spe_event(sampler_spec.event_name, _num_samplers)) {
+        mmap(NULL, (1 + ring_buffer_pages)*PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    }
+
     // To enable inherit flag for sampling, we need to configure it once for
     // each cpu.  Otherwise, while perf_event_open() still succeeds, mmaping
     // the ring buffer fails with EINVAL. This behavior is not documented! I
@@ -355,15 +453,38 @@ void Monitor::add_thread(int tid, int i, event_spec counter_spec, event_spec sam
         open_fds(tid, false, cpu, sampler_spec, _sample_period, _sampler_fds + offset);
 
         for (int index = offset; index < offset + _num_samplers; index++) {
-            void *m = mmap(0, (1 + RING_BUFFER_PAGES) * PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, _sampler_fds[index], 0);
+            
+            void *m = mmap(0, (1 + ring_buffer_pages) * PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, _sampler_fds[index], 0);
             if (m == MAP_FAILED) {
-                std::cerr << "fd=" << _sampler_fds[index] << " index=" << index << std::endl;
+                std::cerr << "fd=" << _sampler_fds[index] << " index=" << index <<std::endl;
                 perror("mmap");
                 throw NmoException("mapping sampler ring buffer failed");
             }
 
             _sampler_bufs[index] = m;
 
+            //If ARM SPE, then mmap the aux ring buffer
+            if (parse_arm_spe_event(sampler_spec.event_name[i])) {
+                //Need to set aux_offset and aux_size prior to mmapping aux ring buffer
+                perf_event_mmap_page *p = (perf_event_mmap_page *) m;
+                p->aux_offset = (1+ring_buffer_pages)*PAGE_SIZE;
+                p->aux_size = aux_buffer_pages*PAGE_SIZE;
+
+                // mmap again to same file descriptor, aux ring buffer
+                void *m_aux = mmap(0, p->aux_size, PROT_READ|PROT_WRITE, MAP_SHARED,
+                                _sampler_fds[index], p->aux_offset);
+                if (m_aux == MAP_FAILED) {
+                    std::cerr << "fd=" << _sampler_fds[index] << " index=" << index << std::endl;
+                    perror("mmap");
+                    throw NmoException("mapping sampler aux ring buffer failed");
+                }
+
+                // aux_offset is a suggestion to mmap, the real offset can be
+                // different. Calculate the real offset and update metadata
+                // page, the offset will be wrong in PERF_RECORD_AUX otherwise.
+                uint64_t real_aux_offset = (uint64_t) m_aux - (uint64_t) m;
+                p->aux_offset = real_aux_offset;
+            }
             // data.fd == index into sampler arrays
             epoll_event ep_event = {};
             ep_event.events = EPOLLIN;
@@ -444,6 +565,11 @@ size_t Monitor::process_samples(int index)
     uint64_t data_head = buf_header->data_head;
     uint64_t data_tail = buf_header->data_tail;
 
+    // Offset from perf ring buffer to perf aux ring buffer
+    uint64_t aux_offset = buf_header->aux_offset;
+    // Size of aux ring buffer
+    uint64_t aux_size = buf_header->aux_size;
+
     // Memory barrier, according to man page we need rmb after data_head read.
     __sync_synchronize();
 
@@ -453,8 +579,8 @@ size_t Monitor::process_samples(int index)
     size_t num_samples = 0;
 
     while (data_tail < data_head) {
-        char *data_start = (char*)_sampler_bufs[index] + PAGE_SIZE;
-        size_t data_size = RING_BUFFER_PAGES*PAGE_SIZE;
+        char *data_start = (char*)_sampler_bufs[index] + buf_header->data_offset;
+        size_t data_size = buf_header->data_size;
 
         // header = u64
         perf_event_header *header = (perf_event_header*)(data_start + (data_tail % data_size));
@@ -487,7 +613,120 @@ size_t Monitor::process_samples(int index)
             break;
 
         case PERF_RECORD_UNTHROTTLE:
+	    break;
+
+        case PERF_RECORD_ITRACE_START:
+        {
+            //ITRACE record. Here is the format, but do we need to handle it?
+            struct
+            {
+                uint32_t pid;
+                uint32_t tid;
+            } itrace;
+
+            itrace.pid = *(uint32_t*)(data_start + ((data_tail + sizeof(perf_event_header)) % data_size));
+            itrace.tid = *(uint32_t*)(data_start + ((data_tail + sizeof(perf_event_header) + sizeof(itrace.pid)) % data_size));
             break;
+        }
+        //handle ARM SPE AUXTRACE events
+        // -Do we need a check here specifically for ARM SPE? For instance, there are Intel
+        // features that require the aux ring buffer.
+        case PERF_RECORD_AUX:
+        {
+
+            //struct in PERF_RECORD_AUX for sample id
+	    struct sample_id {
+                uint32_t pid, tid;
+		uint64_t time;
+		uint32_t cpu, res;
+		uint64_t id;
+	    };
+
+	    //struct for PERF_RECORD_AUX:
+	    //  aux_offset: Offset inside the aux buffer itself, not offset to aux buffer
+	    //  aux_size:   Size of the new data
+	    //  flags (important flags)
+	    //    PERF_AUX_FLAG_TRUNCATED = 0x1 data was truncated -> do not read
+	    //    PERF_AUX_FLAG_OVERWRITE = 0x2 data overwrote other data, in snapshot mode
+	    //    				(we are not using snapshot mode)
+	    //    PERF_AUX_FLAG_PARTIAL   = 0x4 contains gaps
+	    //    PERF_AUX_FLAG_COLLISION = 0x8 sample collision
+	    struct
+	    {
+		uint64_t    aux_offset;
+		uint64_t    aux_size;
+		uint64_t    flags;
+		struct sample_id sample_id;
+	    } aux;
+
+	    aux.aux_offset = *(uint64_t*)(data_start + ((data_tail + sizeof(perf_event_header)) % data_size));
+	    aux.aux_size = *(uint64_t*)(data_start + ((data_tail + sizeof(perf_event_header) + sizeof(aux.aux_offset)) % data_size));
+	    aux.flags = *(uint64_t*)(data_start + ((data_tail + sizeof(perf_event_header) + sizeof(aux.aux_offset) + sizeof(aux.aux_size)) % data_size));
+	    aux.sample_id = *(sample_id* )(data_start + ((data_tail + sizeof(perf_event_header) + sizeof(aux.aux_offset) + sizeof(aux.aux_size) + sizeof(aux.flags)) % data_size));
+
+            if (aux.flags & PERF_AUX_FLAG_COLLISION)
+                _kinfos.back().sample_throttles += 1;
+
+            // Truncated AUX records have size 0, skip processing
+            if (aux.flags != PERF_AUX_FLAG_TRUNCATED) {
+                uint64_t it = 0;
+                while (it < aux.aux_size) {
+                    char *spe_packet = (char*) (data_start + aux_offset + ((aux.aux_offset + it) % aux_size));
+
+                    struct
+                    {
+                        uint64_t time;
+                        uint64_t addr;
+                    } sample;
+
+                    const size_t OFFSET_VA = 31; // Virtual address: bytes 31-39
+                    const size_t OFFSET_TIMESTAMP = 56; // Last 8 bytes are timestamp
+
+                    sample.time = *(uint64_t*) (spe_packet + OFFSET_TIMESTAMP);
+                    sample.addr = *(uint64_t*) (spe_packet + OFFSET_VA);
+
+                    // Inside the ARM SPE packet, the virtual address and timestamp
+                    // are prefaced by a certain byte, skip processing if this byte
+                    // is incorrect (skips those samples)
+                    //   For VA field, it is prefaced with 0xB2
+                    //   For TIMESTAMP field, it is prefaced with 0x71
+                    // Example from ARM SPE packets (little endian):
+                    //   *b2* e0 53 47 61 ae aa 00 00 - Virtual address 0xaaae614753e0
+                    //   *71* f0 f1 3e f1 e7 51 00 00 - Timestamp 90056626729456
+                    char VA_BYTE_PREFIX = 0xB2;
+                    char TIMESTAMP_BYTE_PREFIX = 0x71;
+
+                    char VA_BYTE = *(char*) (spe_packet + OFFSET_VA-1);
+                    char TIMESTAMP_BYTE = *(char*) (spe_packet + OFFSET_TIMESTAMP-1);
+
+                    //An AUXTRACE event can have large regions of PAD at the end
+                    if (sample.time == 0 || sample.addr == 0 || VA_BYTE != VA_BYTE_PREFIX ||
+                            TIMESTAMP_BYTE != TIMESTAMP_BYTE_PREFIX){
+                        it += 64;
+                        continue;
+                    }
+
+                    // From "perf_event_open" man page, timescale conversion from
+                    // SPE time to perf time
+                    uint64_t quot = sample.time >> buf_header->time_shift;
+                    uint64_t rem  = sample.time & (((uint64_t)1 << buf_header->time_shift) - 1);
+                    sample.time = buf_header->time_zero + quot * buf_header->time_mult +
+                                    ((rem * buf_header->time_mult) >> buf_header->time_shift);
+
+                    // In scatter plot, the samples end up starting at t=4,
+                    // subtract 4 seconds in mean time
+                    sample.time -= 4*_clock_res;
+
+                    int event = index % _num_samplers;
+                    _sample_writers[event].write((char*)&sample, sizeof(sample));
+                    num_samples++;
+
+                    it += 64;
+                }
+                buf_header->aux_tail += aux.aux_size;
+            }
+            break;
+        }
 
         default:
             std::cerr << "unknown record type " << header->type << std::endl;

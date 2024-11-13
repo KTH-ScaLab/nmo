@@ -4,7 +4,10 @@ import sys
 import prof_reader
 
 base = sys.argv[1]
-prof = prof_reader.read(base)
+sample_index = None
+if len(sys.argv) > 2:
+    sample_index = int(sys.argv[2])
+prof = prof_reader.read(base, sample_index=sample_index)
 
 #import matplotlib
 #matplotlib.rc("xtick", labelsize=9)

@@ -72,7 +72,8 @@ private:
 class Monitor
 {
 public:
-    Monitor(const event_spec counter_spec, const event_spec sampler_spec, uint64_t sample_period, const char *name);
+    Monitor(const event_spec counter_spec, const event_spec sampler_spec, uint64_t sample_period,
+        int ringbufsize, int auxbufsize, const char *name);
     ~Monitor();
     void reset();
     void start(const char *tag=0, bool offloaded=false);
@@ -100,6 +101,9 @@ private:
     const int _num_cpus;
 
     const uint64_t _sample_period;
+
+    const int _ringbufsize;
+    const int _auxbufsize;
 
     // Lifetime of members?
     const event_spec _counter_spec;

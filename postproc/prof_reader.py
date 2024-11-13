@@ -3,14 +3,34 @@ from collections import defaultdict
 from types import SimpleNamespace
 import hashlib
 import ranges
+import multiprocessing
+import functools
+
+def hist_count(addr, width):
+
+    rh = defaultdict(int)
+    for x in addr:
+        k = x - (x%width)
+        rh[k] += 1
+
+    return rh
 
 def make_regions(addr, rw):
     rh = defaultdict(int)
 
     # Count access by base region
-    for x in addr:
-        k = x - (x%rw)
-        rh[k] += 1
+    multiprocessing.set_start_method('fork')
+    chunks = multiprocessing.cpu_count()
+    addr_split=np.array_split(addr,chunks)
+
+    pool = multiprocessing.Pool(processes=chunks)
+    rh_split = pool.map(functools.partial(hist_count, width=rw), addr_split)
+    pool.close()
+    pool.join()
+
+    for rhs in rh_split:
+        for key in rhs:
+            rh[key] += rhs[key]
 
     # Remove if <1% accesses
     d = []
@@ -60,7 +80,7 @@ def read(base, sample_index=None, region_width=1024*1024*1024):
     sample_name = f"{base}.sample"
 
     for line in open(base+".info", "r"):
-        key, val = line.strip().split("=")
+        key, val = line.strip().split("=", maxsplit=1)
 
         if False and key == "num_samples":
             s = val.split(",")
@@ -78,6 +98,8 @@ def read(base, sample_index=None, region_width=1024*1024*1024):
                 raw_phase.append((tag, int(time)))
         elif key == "clock_res":
             prof.clock_res = float(val)
+        elif key =="l1_cache_line_size":
+            prof.l1_cache_line_size = int(val)
         elif key == "sample_md5":
             md5s = val.strip().split(",")
             if sample_index is None and len(md5s) == 1:
@@ -179,23 +201,6 @@ def read(base, sample_index=None, region_width=1024*1024*1024):
         prof.region_width = np.uint64(region_width)
         prof.region_start, prof.region_size = make_regions(prof.addr, prof.region_width)
         prof.num_regions = len(prof.region_start)
-
-        prof.sample_tag = np.full(len(prof.time), -1)
-        i = 0
-        j = 0
-        while True:
-            try:
-                t = prof.time[i]
-                start, stop = prof.clock[j]
-            except IndexError:
-                break
-            if t < start:
-                i += 1
-            elif t < stop:
-                prof.sample_tag[i] = prof.unique_tag.index(prof.tag[j])
-                i += 1
-            else:
-                j += 1
 
         # prof.sample_phase = np.empty(len(prof.time), dtype=int)
         # for i in range(len(prof.time)):

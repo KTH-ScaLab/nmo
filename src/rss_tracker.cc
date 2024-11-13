@@ -8,7 +8,7 @@ RssTracker::RssTracker(const char *file)
     : _os(file)
 {
     //_os << "time,rss,pss" << std::endl;
-    _os << "time,local,remote" << std::endl;
+    _os << "time,local,remote,active" << std::endl;
 }
 
 void RssTracker::start_thread()
@@ -53,6 +53,7 @@ void RssTracker::run_thread()
 
         size_t local = 0;
         size_t remote = 0;
+        size_t total_active = 0;
 
         std::ifstream is("/proc/self/numa_maps");
         std::string line;
@@ -63,7 +64,15 @@ void RssTracker::run_thread()
             sep = strchr(sep+1, ' ');
             if (!sep) continue;
 
+            size_t lp = 0;
+            size_t rp = 0;
+            size_t page_kb = 4;
+            ssize_t active = -1;
+
             for (;;) {
+                const char *key_psize = " kernelpagesize_kB=";
+                const char *key_active = " active=";
+
                 if (sep[1] == 'N') {
                     int node = atoi(sep+2);
                     sep = strchr(sep, '=');
@@ -71,16 +80,31 @@ void RssTracker::run_thread()
                     long pages = atol(sep+1);
 
                     if (node == 0)
-                        local += 4096*pages;
+                        lp += pages;
                     else
-                        remote += 4096*pages;
+                        rp += pages;
+                } else if (!memcmp(sep, key_psize, strlen(key_psize))) {
+                    page_kb = atoi(sep+strlen(key_psize));
+                    if (!page_kb) {
+                        throw NmoException("failed to parse page size field");
+                    }
+                } else if (!memcmp(sep, key_active, strlen(key_active))) {
+                    active = atoi(sep+strlen(key_active));
                 }
+
                 sep = strchr(sep+1, ' ');
                 if (!sep) break;
             }
+
+            local += lp * page_kb * 1024;
+            remote += rp * page_kb * 1024;
+
+            if (active < 0)
+                active = lp+rp;
+            total_active += active * page_kb * 1024;
         }
 
-        _os << now << "," << local << "," << remote << std::endl;
+        _os << now << "," << local << "," << remote << "," << total_active << std::endl;
 
         next += period;
         std::this_thread::sleep_until(next);

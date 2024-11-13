@@ -9,6 +9,24 @@ prof = prof_reader.read(base)
 import matplotlib
 matplotlib.rc("xtick", labelsize=9)
 
+# Calculate sample tag
+prof.sample_tag = np.full(len(prof.time), -1)
+i = 0
+j = 0
+while True:
+    try:
+        t = prof.time[i]
+        start, stop = prof.clock[j]
+    except IndexError:
+        break
+    if t < start:
+        i += 1
+    elif t < stop:
+        prof.sample_tag[i] = prof.unique_tag.index(prof.tag[j])
+        i += 1
+    else:
+        j += 1
+
 utag_addr = [prof.addr[prof.sample_tag == i] for i in range(len(prof.unique_tag))]
 
 # Make one histogram per region and tag

@@ -2,7 +2,9 @@
 #include "periodic_profiler.hh"
 #include "clock.hh"
 
-// Use output of tests/list_events to find event names on current architecture
+// Use output of bin/list_events to find event names on current architecture
+
+#if defined(__x86_64__)
 static const char *EVENT_NAME[] = {
     "OFFCORE_RESPONSE_0:L3_MISS_LOCAL",
     "OFFCORE_RESPONSE_1:L3_MISS_MISS_REMOTE_HOP1_DRAM",
@@ -43,18 +45,56 @@ const bool EVENT_LEADER[] = {
 };
 
 const int NUM_EVENTS = 10;
+#elif defined(__aarch64__)
+static const char *EVENT_NAME[] = {
+    "REMOTE_ACCESS", // Access on a different socket
+    "BUS_ACCESS_RD", // Read access on bus, from load/store
+                     // unit to DynamIQ Shared Unit (DSU) 
+    "INST_RETIRED",  // Instruction executed
+    //"MEM_READ_ACCESS", // "MEM_ACCESS_RD" in ARM PMU manual,
+                         // counts access in memory and all
+                         // cache levels without prefetch
+    //"LL_CACHE_MISS_RD", // Read miss in last level cache
+};
+
+const bool EVENT_LEADER[] = {
+    true,
+    true,
+    true,
+};
+
+const int NUM_EVENTS = 3;
+#else
+#error unsupported architecture
+#endif
 
 static_assert(NUM_EVENTS == sizeof(EVENT_NAME)/sizeof(char *));
 static_assert(NUM_EVENTS == sizeof(EVENT_LEADER)/sizeof(bool));
 
-const event_spec null_spec    = {0, NULL, NULL};
+const event_spec null_spec = {0, NULL, NULL};
 
 const event_spec rl_counters = {NUM_EVENTS, EVENT_NAME, EVENT_LEADER};
-const event_spec fp_counters = {NUM_EVENTS-2, EVENT_NAME+2, EVENT_LEADER+2};
 
-//const event_spec mem_samplers = {2, EVENT_NAME, EVENT_LEADER};
+#if defined(__x86_64__)
 static const char *SAMPLE_EVENTS[] = {"MEM_LOAD_UOPS_L3_MISS_RETIRED:LOCAL_DRAM", "MEM_LOAD_UOPS_L3_MISS_RETIRED:REMOTE_DRAM"};
 const event_spec mem_samplers = {2, SAMPLE_EVENTS, EVENT_LEADER};
+#endif
+//Issues with ARM SPE:
+// -Non-SPE events rely on PERF_SAMPLE_ADDR being present in a raw sample event, which has the
+//  description in perf_event_open man page that "Records an address, if applicable". Unfortunately,
+//  this field always returns 0 for regular hardware counters on ARM, so sampling of non-SPE events on
+//  ARM is advised against. If both SPE and non-SPE events are sampled, it can cause mmap to fail for
+//  the aux buffer required for SPE.
+//
+// -Can not do "ARM_SPE:LOAD" and then "ARM_SPE:STORE" separately. perf_event_open
+//  fails with device busy
+//
+// -For sampled events, the info file should display the hardware counters full count of sampled events,
+//  however ARM_SPE:LOADSTORE, etc will have zeros since the event is not backed by a real hardware counter
+#if defined(__aarch64__)
+static const char *SAMPLE_EVENTS[] = {"ARM_SPE:LOADSTORE"};
+const event_spec mem_samplers = {1, SAMPLE_EVENTS, EVENT_LEADER};
+#endif
 
 static const char *PF_EVENTS[] = {
     "OFFCORE_RESPONSE_0:PF_L2_DATA_RD",
@@ -82,8 +122,10 @@ static event_spec get_samplers(int sample_period, perp_mode mode)
     }
 }
 
-PeriodicProfiler::PeriodicProfiler(const char *profile_name, int sample_period, perp_mode mode)
-    : _mon(get_counters(sample_period, mode), get_samplers(sample_period, mode), sample_period, profile_name)
+PeriodicProfiler::PeriodicProfiler(const char *profile_name, int sample_period, perp_mode mode,
+    int ringbufsize, int auxbufsize)
+    : _mon(get_counters(sample_period, mode), get_samplers(sample_period, mode), sample_period,
+        ringbufsize, auxbufsize, profile_name)
     , _tag("init")
 {
 

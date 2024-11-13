@@ -25,26 +25,58 @@ static int read_period()
     return 0;
 }
 
+int parse_bufsize(const char* env_bufsize)
+{
+    int bufsize = atoi(env_bufsize);
+    if (bufsize) {
+        //Round down to power of 2
+        int n = 1;
+        while (n <= bufsize) {
+            n = n << 1;
+        }
+        //While loop goes one step too far, shift down one step
+        return n >> 1;
+    }
+
+    // Return a buffer size of 1 (MiB) by default
+    return 1;
+}
+
 __attribute__((constructor)) 
 static void lib_init()
 {
     if (!getenv("NMO_ENABLE"))
         return;
 
-    // Prevent child processes (like OMPI's orted) from being individually
-    // tracked and profiled.
-    unsetenv("NMO_ENABLE");
-
     std::ifstream commf("/proc/self/comm");
     char comm[256];
     commf.get(comm, sizeof(comm));
     commf.close();
 
+    const char *target = getenv("NMO_TARGET");
+    if (target && *target)
+        if (strcmp(comm, target))
+            return;
+
+    // Prevent child processes (like OMPI's orted) from being individually
+    // tracked and profiled.
+    unsetenv("NMO_ENABLE");
+
     uint64_t period = read_period();
     bool track_rss = !!getenv("NMO_TRACK_RSS");
+
     const char *name = getenv("NMO_NAME");
     if (!name)
         name = "nmo";
+    const char *pidname = getenv("NMO_PIDNAME");
+    if (pidname && atoi(pidname)) {
+        int len = strlen(name);
+        char *namebuf = (char *)malloc(len + 20);
+        memcpy(namebuf, name, len);
+        sprintf(namebuf+len, "%d", getpid());
+        name = namebuf;
+    }
+
     perp_mode perp_mode = PERP_OFF;
     const char *mode = getenv("NMO_MODE");
 
@@ -61,11 +93,24 @@ static void lib_init()
         }
     }
 
+    const char *env_ringbufsize = getenv("NMO_BUFSIZE");
+    int ringbufsize = 1;
+    if (env_ringbufsize && *env_ringbufsize) {
+        ringbufsize = parse_bufsize(env_ringbufsize);
+    }
+
+    const char *env_auxbufsize = getenv("NMO_AUXBUFSIZE");
+    int auxbufsize = 1;
+    if (env_auxbufsize && *env_auxbufsize) {
+        auxbufsize = parse_bufsize(env_auxbufsize);
+    }
+
     std::cerr << "===== " <<
         "NMO STARTER ENABLED: pid="
         << getpid() << " tid=" << gettid() << " comm=" << comm
         << " period=" << period << " track_rss=" << track_rss
         << " name=" << name << " perp_mode=" << perp_mode
+        << " ringbufsize=" << ringbufsize << " [MiB/thread] auxbufsize=" << auxbufsize << " [MiB/thread]"
         << " =====" << std::endl;
 
     if (track_rss) {
@@ -76,7 +121,7 @@ static void lib_init()
     }
 
     if (perp_mode) {
-        lib_perp = new PeriodicProfiler(name, period, perp_mode);
+        lib_perp = new PeriodicProfiler(name, period, perp_mode, ringbufsize, auxbufsize);
     }
 }
 
